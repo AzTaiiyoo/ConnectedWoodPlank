@@ -33,8 +33,8 @@ BLECharacteristic strainGaugeCharacteristic("cc54f4ce-1037-4b73-9e5a-cdcd53e8514
 BLECharacteristic piezoCharacteristic("beb5483e-36e1-4688-b7f5-ea07361b26a9", BLERead | BLENotify, 10); 
 
 void setup() {
-  Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX, TX
+  Serial.begin(115200);  // Pour le débogage via USB
+  Serial2.begin(115200, SERIAL_8N1, 17, 16); // RX, TX pour la communication inter-contrôleurs
 
   // Initialize strain gauge sensors
   tare();
@@ -79,17 +79,15 @@ void tare() {
 }
 
 void readCapacitiveSensors() {
-  static String buffer;  // Buffer pour accumuler les données
+  static String buffer;
   
   while (Serial2.available()) {
     char c = Serial2.read();
     buffer += c;
     
-    // Chercher une trame complète
     if (c == '>') {
       if (buffer.startsWith("<")) {
-        // Trame complète trouvée
-        String data = buffer.substring(1, buffer.length() - 1);  // Enlever < et >
+        String data = buffer.substring(1, buffer.length() - 1);
         
         int index = 0;
         char* token = strtok(&data[0], ",");
@@ -98,17 +96,25 @@ void readCapacitiveSensors() {
           token = strtok(NULL, ",");
         }
         
-        // Envoyer ACK seulement si toutes les données sont reçues correctement
         if (index == numCapacitivePins) {
-          Serial2.write('A');  // Envoyer ACK
-          Serial.println("Capacitive data received and ACK sent");
+          Serial2.write('A');
+          
+          // Nouvel affichage uniformisé
+          Serial.println("\n--- Capacitive Sensor Data ---");
+          for (int i = 0; i < numCapacitivePins; i++) {
+            Serial.print("Sensor ");
+            Serial.print(i);
+            Serial.print(" - Raw: ");
+            Serial.print(capacitiveData[i]);
+            Serial.print(", Scaled: ");  // Dans ce cas, Raw = Scaled car pas de conversion
+            Serial.println(capacitiveData[i]);
+          }
         }
       }
-      buffer = "";  // Reset buffer après traitement
+      buffer = "";
     }
     
-    // Protection contre débordement du buffer
-    if (buffer.length() > 100) {  // Taille arbitraire de sécurité
+    if (buffer.length() > 100) {
       buffer = "";
     }
   }
@@ -118,63 +124,75 @@ void readStrainGauges() {
   long results[CHANNEL_COUNT];
   scales.read(results);
   
+  Serial.println("\n--- Strain Gauge Data ---");
   for (int i = 0; i < CHANNEL_COUNT; i++) {
     if (results[i] < 0) {
-      results[i] = 0; // If the value is negative, set to 0
+      results[i] = 0;
     }
-    // Apply the approximation
     strainGaugeData[i] = static_cast<uint8_t>((results[i]/842)*255/2500);
+    
+    Serial.print("Gauge ");
+    Serial.print(i);
+    Serial.print(" - Raw: ");
+    Serial.print(results[i]);
+    Serial.print(", Scaled: ");
+    Serial.println(strainGaugeData[i]);
   }
-  
-  Serial.println("Strain gauge data read and approximated");
 }
 
-void readPiezo(){
+void readPiezo() {
+  Serial.println("\n--- Piezo Sensor Data ---");
   for (int i = 0; i < PIEZO_COUNT; i++) {
     int reading = analogRead(piezoPins[i]);
-    // Convertir la lecture ADC 12-bit (0-4095) en valeur 16-bit (0-65535)
     piezoData[i] = map(reading, 0, 4095, 0, 65535);
+    
+    Serial.print("Piezo ");
+    Serial.print(i);
+    Serial.print(" - Raw: ");
+    Serial.print(reading);
+    Serial.print(", Mapped: ");
+    Serial.println(piezoData[i]);
   }
-
-  Serial.println("Piezo data read");
 }
 
 void updateBLEData(char sensorType) {
   switch(sensorType) {
-    case 'CS': // Capacitive and Strain Gauge
+    case 'C':  // Capacitive sensors only
       {
-        const uint8_t CAPACITIVE_START = 0x3C; // '<' in hex
-        const uint8_t CAPACITIVE_END = 0x3E; // '>' in hex
-        const uint8_t STRAIN_START = 0x28; // '(' in hex
-        const uint8_t STRAIN_END = 0x29; // ')' in hex
+        const uint8_t CAPACITIVE_START = 0x3C;
+        const uint8_t CAPACITIVE_END = 0x3E;
 
-        // Capacitive data
         uint8_t capacitiveDataBytes[numCapacitivePins * 2 + 2];
-        capacitiveDataBytes[0] = CAPACITIVE_START; // '<'
+        capacitiveDataBytes[0] = CAPACITIVE_START;
         for (int i = 0; i < numCapacitivePins; i++) {
           capacitiveDataBytes[i*2 + 1] = capacitiveData[i] & 0xFF;
           capacitiveDataBytes[i*2 + 2] = (capacitiveData[i] >> 8) & 0xFF;
         }
-        capacitiveDataBytes[numCapacitivePins * 2 + 1] = CAPACITIVE_END; // '>'
+        capacitiveDataBytes[numCapacitivePins * 2 + 1] = CAPACITIVE_END;
         capacitiveCharacteristic.writeValue(capacitiveDataBytes, sizeof(capacitiveDataBytes));
 
-        // Print capacitive data
-        Serial.print("Capacitive: ");
+        // Print BLE packet data
+        Serial.print("\nCapacitive BLE packet: ");
         for (int i = 0; i < sizeof(capacitiveDataBytes); i++) {
           Serial.print(capacitiveDataBytes[i], HEX);
           Serial.print(" ");
         }
         Serial.println();
+      }
+      break;
 
-        // Strain Gauge data
+    case 'S':  // Strain Gauges only
+      {
+        const uint8_t STRAIN_START = 0x28;
+        const uint8_t STRAIN_END = 0x29;
+
         uint8_t strainGaugeDataBytes[numStrainGauges + 2];
-        strainGaugeDataBytes[0] = STRAIN_START; // '('
+        strainGaugeDataBytes[0] = STRAIN_START;
         memcpy(&strainGaugeDataBytes[1], strainGaugeData, numStrainGauges);
-        strainGaugeDataBytes[numStrainGauges + 1] = STRAIN_END; // ')'
+        strainGaugeDataBytes[numStrainGauges + 1] = STRAIN_END;
         strainGaugeCharacteristic.writeValue(strainGaugeDataBytes, sizeof(strainGaugeDataBytes));
 
-        // Print strain gauge data
-        Serial.print("Strain: ");
+        Serial.print("Strain Gauge BLE packet: ");
         for (int i = 0; i < sizeof(strainGaugeDataBytes); i++) {
           Serial.print(strainGaugeDataBytes[i], HEX);
           Serial.print(" ");
@@ -182,21 +200,21 @@ void updateBLEData(char sensorType) {
         Serial.println();
       }
       break;
-    case 'P': // Piezo
+
+    case 'P':  // Piezo sensors
       {
         uint8_t piezoPacket[10];
-        piezoPacket[0] = 0x2D; // '-'
-        piezoPacket[1] = 0x3E; // '>'
+        piezoPacket[0] = 0x2D;
+        piezoPacket[1] = 0x3E;
         for (int i = 0; i < PIEZO_COUNT; i++) {
           piezoPacket[2 + i * 2] = (piezoData[i] >> 8) & 0xFF;
           piezoPacket[3 + i * 2] = piezoData[i] & 0xFF;
         }
-        piezoPacket[8] = 0x3C; // '<'
-        piezoPacket[9] = 0x2D; // '-'
+        piezoPacket[8] = 0x3C;
+        piezoPacket[9] = 0x2D;
         piezoCharacteristic.writeValue(piezoPacket, 10);
 
-        // Print piezo data
-        Serial.print("Piezo: ");
+        Serial.print("Piezo BLE packet: ");
         for (int i = 0; i < 10; i++) {
           Serial.print(piezoPacket[i], HEX);
           Serial.print(" ");
@@ -208,20 +226,23 @@ void updateBLEData(char sensorType) {
 }
 
 void loop() {
-  static unsigned long lastCSReadTime = 0;
+  static unsigned long lastCapacitiveStrainReadTime = 0;
   static unsigned long lastPiezoReadTime = 0;
 
   unsigned long currentTime = millis();
 
-  // Lecture et envoi des données capacitives et de jauge de contrainte (10 fois par seconde)
-  if (currentTime - lastCSReadTime >= 100) {
+  // Read and send capacitive sensor data (every 100ms)
+  if (currentTime - lastCapacitiveStrainReadTime >= 100) {
     readCapacitiveSensors();
+    updateBLEData('C');
+
+  // Read and send strain gauge data (every 100ms)
     readStrainGauges();
-    updateBLEData('CS');
-    lastCSReadTime = currentTime;
+    updateBLEData('S');
+    lastCapacitiveStrainReadTime = currentTime;
   }
 
-  // Lecture et envoi des données piézoélectriques (50 fois par seconde)
+  // Read and send piezo data (every 20ms)
   if (currentTime - lastPiezoReadTime >= 20) {
     readPiezo();
     updateBLEData('P');

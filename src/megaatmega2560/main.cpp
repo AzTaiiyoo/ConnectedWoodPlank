@@ -19,12 +19,20 @@ const unsigned long ACK_TIMEOUT = 50;  // Timeout pour l'ACK en millisecondes
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(115200, SERIAL_8N1);
+  Serial3.begin(115200, SERIAL_8N1);
 
   Serial.println("Initializing capacitive sensors...");
 
   // Calibrate the capacitive sensors
   for (int i = 0; i < numPins; ++i) {
+    if (i == 0){
+      refValues[i] += 27;
+    }
+
+    if (i == 1){
+      refValues[i] += 10;
+    }
+
     refValues[i] = ADCTouch.read(analogPins[i], 20);
     Serial.print("Reference value for pin A");
     Serial.print(i);
@@ -37,8 +45,8 @@ void setup() {
 }
 
 void checkAck() {
-  if (Serial2.available()) {
-    char ack = Serial2.read();
+  if (Serial3.available()) {
+    char ack = Serial3.read();
     if (ack == 'A') {  // ACK reçu
       waitingAck = false;
       lastAckTime = millis();
@@ -56,22 +64,22 @@ void sendData() {
   if (!waitingAck) {  // Envoyer seulement si pas en attente d'un ACK
     Serial.println("Sending data:");
     Serial.print("<");
-    Serial2.print("<");
+    Serial3.print("<");
     
     for (int i = 0; i < numPins; ++i) {
       values[i] = ADCTouch.read(analogPins[i]) - refValues[i];
       
       Serial.print(values[i]);
-      Serial2.print(values[i]);
+      Serial3.print(values[i]);
       
       if (i < numPins - 1) {
         Serial.print(",");
-        Serial2.print(",");
+        Serial3.print(",");
       }
     }
     
     Serial.println(">");
-    Serial2.println(">");
+    Serial3.println(">");
     
     waitingAck = true;
     lastAckTime = millis();
